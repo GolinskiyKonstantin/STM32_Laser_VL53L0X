@@ -1,0 +1,234 @@
+/*	сохраняем данный файл в кодировке UTF-8		*/
+
+	author: Golinskiy Konstantin	e-mail: golinskiy.konstantin@gmail.com
+
+////////////////////////////////////////////////////////////////////////////////
+
+#include "vl53l0x_api.h"
+
+// настройки работы модуля ( выбрать что то одно )
+//------------------------------------  
+
+	//#define LONG_RANGE			// 10 mm  - 20 000 mm 	дальная дистанция большая погрешность
+	//#define DEFAULT					// 100 mm - 400 mm		по умолчанию
+	#define HIGH_ACCURACY		// 10 mm - 400 mm		высокая точность
+	//#define HIGH_SPEED			// 10 mm - 400 mm		высокая скорость замера есть погрешность
+	
+//------------------------------------
+
+//------------------------------------
+// если нужно получать значение по прерыванию то раскоментируем
+// если работает в обычном ( блокирующем ) режиме то комментируем
+// >>>>> в режиме прерывания значения более точные и стабильные <<<<<
+#define INTERRUPT_ENABLE
+//------------------------------------
+
+volatile uint32_t val = 0;
+
+
+// создаем структуру на один датчик ----------------------
+VL53L0X_Dev_t Device_one;
+VL53L0X_RangingMeasurementData_t Device_data_one;
+//--------------------------------------------------------
+
+
+// несколько вспомогательных переменных для инициализации
+uint32_t refSpadCount;
+uint8_t isApertureSpads;
+uint8_t VhvSettings;
+uint8_t PhaseCal;
+//--------------------------------------------------------
+
+////////////////////////////////////////////////////////////////////////////////
+
+	.........
+	.........
+
+main()=============================================================================================================================
+
+	.........
+	.........
+	.........
+
+///////////////////////////////////////////////////////////////////////////////////
+	
+	#ifdef INTERRUPT_ENABLE
+		// отключаем прерывание перед инициализацией датчика
+		HAL_NVIC_DisableIRQ(EXTI4_IRQn);
+	#endif
+	
+	// перегружаем датчик -----------------------------------------------
+	HAL_GPIO_WritePin (XSHUT_GPIO_Port, XSHUT_Pin, GPIO_PIN_RESET );
+	HAL_Delay (100);
+	HAL_GPIO_WritePin (XSHUT_GPIO_Port, XSHUT_Pin, GPIO_PIN_SET );
+	HAL_Delay (100); // делаем задержку чтобы датчик запустился ( иначе не коректно инициализируеться )
+	//-------------------------------------------------------------------
+	
+	// устанавливаем конфигурацию шины I2C
+	VL53L0X_SetConfigI2C( &Device_one, hi2c1, VL53L0X_SLAVE_ADDRESS );
+	
+	//--------------------------------------------------------------------------------------------
+	// усли используем два или более датчика то отключаем их так как у всех один и тотже адресс
+	// но программно можно поменять адресс но он не храниться при выключенном датчике 
+	// ( нужно записывать новый адресс каждый раз при включении )
+	// выключаем все модули ( притянув ножку XSHUT к земле )
+	// потом поочереди включаем датчики и отправляем на них новые адреса
+	// для каждого датчика делаем свою структуру
+	
+	// меняем адрес датчика I2C на другой чтобы можно было подключить несколько )
+	// адрес сохраняеться пока есть питание и датчик не перегружен ножкой XSHUT
+	// адрес передаем со сдвигом влево на 1 бит (adr<<1)
+	VL53L0X_SetDeviceAddress(&Device_one, (0x21<<1) );
+	//--------------------------------------------------------------------------------------------
+
+
+	// установки режима работы датчика ---------------------------------------------
+	VL53L0X_WaitDeviceBooted( &Device_one );
+	VL53L0X_DataInit( &Device_one );
+	VL53L0X_StaticInit( &Device_one );
+	VL53L0X_PerformRefCalibration( &Device_one, &VhvSettings, &PhaseCal);
+	VL53L0X_PerformRefSpadManagement( &Device_one, &refSpadCount, &isApertureSpads);
+	
+	
+	// Enable/Disable Sigma and Signal check
+	VL53L0X_SetLimitCheckEnable( &Device_one, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, 1);
+	VL53L0X_SetLimitCheckEnable( &Device_one, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, 1);
+	
+
+	//------------------------------------  
+	#ifdef LONG_RANGE	// 10 mm  - 20 000 mm 
+
+		VL53L0X_SetLimitCheckValue( &Device_one, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, (FixPoint1616_t)(0.1*65536));// (default is 0.25 MCPS)
+		VL53L0X_SetLimitCheckValue( &Device_one, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, (FixPoint1616_t)(60*65536));
+	  
+		VL53L0X_SetMeasurementTimingBudgetMicroSeconds( &Device_one, 33000);	// (default is about 33 ms)
+	  
+		// Устанавливаем период импульса VCSEL (лазер с поверхностным излучением с вертикальной полостью) для 
+		// данного типа периода (преддиапазон или конечный диапазон) на заданное значение в PCLK. 
+		// Более длительные периоды увеличивают потенциальный диапазон датчика. 
+		// Допустимые значения (только четные числа): 
+		// pre: от 12 до 18 (инициализированное значение по умолчанию: 14) 
+		// final: от 8 до 14 (инициализированное значение по умолчанию: 10) 
+		VL53L0X_SetVcselPulsePeriod( &Device_one, VL53L0X_VCSEL_PERIOD_PRE_RANGE, 18);
+		VL53L0X_SetVcselPulsePeriod( &Device_one, VL53L0X_VCSEL_PERIOD_FINAL_RANGE, 14);
+
+	#endif  
+	//-----------------------------------
+	#ifdef DEFAULT	// 100 mm - 400 mm
+	  
+		VL53L0X_SetLimitCheckValue( &Device_one, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, (FixPoint1616_t)(0.25*65536));// (default is 0.25 MCPS)
+		VL53L0X_SetLimitCheckValue( &Device_one, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, (FixPoint1616_t)(60*65536));
+		
+		VL53L0X_SetMeasurementTimingBudgetMicroSeconds( &Device_one, 33000);	// (default is about 33 ms)
+		
+		// Устанавливаем период импульса VCSEL (лазер с поверхностным излучением с вертикальной полостью) для 
+		// данного типа периода (преддиапазон или конечный диапазон) на заданное значение в PCLK. 
+		// Более длительные периоды увеличивают потенциальный диапазон датчика. 
+		// Допустимые значения (только четные числа): 
+		// pre: от 12 до 18 (инициализированное значение по умолчанию: 14) 
+		// final: от 8 до 14 (инициализированное значение по умолчанию: 10) 
+		VL53L0X_SetVcselPulsePeriod( &Device_one, VL53L0X_VCSEL_PERIOD_PRE_RANGE, 14);
+		VL53L0X_SetVcselPulsePeriod( &Device_one, VL53L0X_VCSEL_PERIOD_FINAL_RANGE, 10);
+	#endif  
+	//----------------------------------  
+	#ifdef HIGH_ACCURACY	// 10 mm - 400 mm
+
+		VL53L0X_SetLimitCheckValue( &Device_one, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, (FixPoint1616_t)(0.25*65536));// (default is 0.25 MCPS)
+		VL53L0X_SetLimitCheckValue( &Device_one, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, (FixPoint1616_t)(60*65536));
+		
+		VL53L0X_SetMeasurementTimingBudgetMicroSeconds( &Device_one, 200000);	// (default is about 33 ms) - 200ms
+		
+		// Устанавливаем период импульса VCSEL (лазер с поверхностным излучением с вертикальной полостью) для 
+		// данного типа периода (преддиапазон или конечный диапазон) на заданное значение в PCLK. 
+		// Более длительные периоды увеличивают потенциальный диапазон датчика. 
+		// Допустимые значения (только четные числа): 
+		// pre: от 12 до 18 (инициализированное значение по умолчанию: 14) 
+		// final: от 8 до 14 (инициализированное значение по умолчанию: 10) 
+		VL53L0X_SetVcselPulsePeriod( &Device_one, VL53L0X_VCSEL_PERIOD_PRE_RANGE, 18);
+		VL53L0X_SetVcselPulsePeriod( &Device_one, VL53L0X_VCSEL_PERIOD_FINAL_RANGE, 14);
+
+	#endif 
+	//---------------------------------
+	#ifdef HIGH_SPEED	// // 10 mm - 400 mm
+		
+		VL53L0X_SetLimitCheckValue( &Device_one, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, (FixPoint1616_t)(0.25*65536));// (default is 0.25 MCPS)
+		VL53L0X_SetLimitCheckValue( &Device_one, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, (FixPoint1616_t)(60*65536));
+		
+		VL53L0X_SetMeasurementTimingBudgetMicroSeconds( &Device_one, 20000);	// (default is about 33 ms) - 20ms
+		
+		// Устанавливаем период импульса VCSEL (лазер с поверхностным излучением с вертикальной полостью) для 
+		// данного типа периода (преддиапазон или конечный диапазон) на заданное значение в PCLK. 
+		// Более длительные периоды увеличивают потенциальный диапазон датчика. 
+		// Допустимые значения (только четные числа): 
+		// pre: от 12 до 18 (инициализированное значение по умолчанию: 14) 
+		// final: от 8 до 14 (инициализированное значение по умолчанию: 10) 
+		VL53L0X_SetVcselPulsePeriod( &Device_one, VL53L0X_VCSEL_PERIOD_PRE_RANGE, 18);
+		VL53L0X_SetVcselPulsePeriod( &Device_one, VL53L0X_VCSEL_PERIOD_FINAL_RANGE, 14);
+		
+	#endif
+	//---------------------------------
+
+// еще один режим----------------------------------------------------
+/////////////  10 mm- 100 mm ///////////////////////////////////////////////////////////////////////////////////
+//	  VL53L0X_SetLimitCheckValue( &Device_one, VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, (FixPoint1616_t)(0.25*65536));
+//	  VL53L0X_SetLimitCheckValue( &Device_one, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, (FixPoint1616_t)(60*65536));
+//	  VL53L0X_SetMeasurementTimingBudgetMicroSeconds( &Device_one, 200000);
+//	  VL53L0X_SetVcselPulsePeriod( &Device_one, VL53L0X_VCSEL_PERIOD_PRE_RANGE, 14);
+//	  VL53L0X_SetVcselPulsePeriod( &Device_one, VL53L0X_VCSEL_PERIOD_FINAL_RANGE, 10);
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------
+
+	//-- делаем в конце всех настроек ---------------------------------------------
+	#ifdef INTERRUPT_ENABLE
+		VL53L0X_SetDeviceMode( &Device_one, VL53L0X_DEVICEMODE_CONTINUOUS_RANGING);
+		VL53L0X_StartMeasurement( &Device_one );
+	#else
+		VL53L0X_SetDeviceMode( &Device_one, VL53L0X_DEVICEMODE_SINGLE_RANGING);
+	#endif
+	//------------------------------------------------------------------
+	
+	#ifdef INTERRUPT_ENABLE
+		// включаем прерывание
+		HAL_NVIC_EnableIRQ(EXTI4_IRQn);
+	#endif
+	
+///////////////////////////////////////////////////////////////////////////////////
+
+
+while(1)===========================================================================================================================
+	
+		//----------------------------------------------------------------------------------
+		#ifndef INTERRUPT_ENABLE
+			// включение замера датчика и получение результата в миллиметрах --------------------
+			VL53L0X_PerformSingleRangingMeasurement( &Device_one, &Device_data_one);
+			
+			// если данные коректные то забираем их
+			if( Device_data_one.RangeStatus == 0 ){
+					val = Device_data_one.RangeMilliMeter;
+			}
+		#endif
+		//-----------------------------------------------------------------------------------
+		
+	.........
+	.........
+	.........
+	.........
+
+=== end while(1) ==================================================================================================================
+=== end main() ====================================================================================================================
+
+
+///////////////////////////////////////////////////////////////////////////////////////
+#ifdef INTERRUPT_ENABLE
+	void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+	{
+		if(GPIO_Pin == GPIO1_Pin)
+		{
+			VL53L0X_GetRangingMeasurementData(&Device_one, &Device_data_one);
+			VL53L0X_ClearInterruptMask(&Device_one, VL53L0X_REG_SYSTEM_INTERRUPT_GPIO_NEW_SAMPLE_READY);
+			val = Device_data_one.RangeMilliMeter;
+		}
+	}
+#endif
+///////////////////////////////////////////////////////////////////////////////////////
+
